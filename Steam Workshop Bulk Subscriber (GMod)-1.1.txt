@@ -1,0 +1,126 @@
+// ==UserScript==
+// @name         Steam Workshop Bulk Subscriber (GMod)
+// @namespace    http://tampermonkey.net/
+// @version      1.1
+// @description  Subscribe to a list of workshop items from a text file
+// @author       You
+// @match        https://steamcommunity.com/*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // Create a floating UI
+    const ui = document.createElement('div');
+    ui.style.cssText = `
+        position: fixed; top: 10px; left: 10px; z-index: 9999;
+        background: #1b2838; color: #c6d4df; padding: 15px; border-radius: 6px;
+        box-shadow: 0 0 15px rgba(0,0,0,0.7); font-family: Arial,sans-serif;
+        max-width: 500px; width: 90%;
+    `;
+    ui.innerHTML = `
+        <strong>Bulk Subscriber for GMod</strong><br>
+        <textarea id="bulk-urls" rows="10" style="width:100%; margin:5px 0; background:#0e141b; color:#c6d4df; border:1px solid #4f94cd;" placeholder="Paste workshop URLs (one per line)..."></textarea>
+        <button id="bulk-start" style="padding:5px 10px; margin-right:5px;">Start</button>
+        <button id="bulk-stop" style="padding:5px 10px; margin-right:5px;">Stop</button>
+        <span id="bulk-progress" style="margin-left:10px;"></span>
+    `;
+    document.body.appendChild(ui);
+
+    const textarea = document.getElementById('bulk-urls');
+    const startBtn = document.getElementById('bulk-start');
+    const stopBtn = document.getElementById('bulk-stop');
+    const progress = document.getElementById('bulk-progress');
+
+    let running = false;
+    let abort = false;
+
+    // Extract item IDs from URLs like: ...?id=123456
+    function parseIds(raw) {
+        const lines = raw.split(/[\r\n]+/);
+        const ids = [];
+        lines.forEach(line => {
+            const match = line.match(/[?&]id=(\d+)/);
+            if (match && match[1]) ids.push(match[1]);
+        });
+        return [...new Set(ids)]; // unique
+    }
+
+    async function subscribeAll() {
+        const raw = textarea.value.trim();
+        if (!raw) {
+            alert('Paste some URLs first.');
+            return;
+        }
+
+        const ids = parseIds(raw);
+        if (ids.length === 0) {
+            alert('No valid workshop IDs found.');
+            return;
+        }
+
+        running = true;
+        abort = false;
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+
+        // Get session ID (Steam sets this globally on community pages)
+        const sessionId = (typeof g_sessionID !== 'undefined') ? g_sessionID : null;
+        if (!sessionId) {
+            alert('Could not find session ID. Make sure you are logged in and on a steamcommunity.com page.');
+            running = false;
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            return;
+        }
+
+        let success = 0, fail = 0;
+        for (let i = 0; i < ids.length; i++) {
+            if (abort) {
+                progress.textContent = `Stopped. Processed ${i} of ${ids.length}.`;
+                break;
+            }
+
+            const id = ids[i];
+            try {
+                const resp = await fetch('https://steamcommunity.com/sharedfiles/subscribe', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    },
+                    body: `id=${id}&appid=4000&sessionid=${encodeURIComponent(sessionId)}`,
+                    credentials: 'include'
+                });
+
+                const json = await resp.json();
+                if (json.success === 1 || json.success === true) {
+                    success++;
+                } else {
+                    fail++;
+                }
+            } catch (err) {
+                fail++;
+            }
+
+            progress.textContent = `${i + 1}/${ids.length} – ${success} ok, ${fail} failed`;
+
+            // Delay 3 seconds between requests (adjust if needed)
+            await new Promise(resolve => setTimeout(resolve, 3000));
+        }
+
+        running = false;
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+        if (!abort) progress.textContent += ' – Done!';
+    }
+
+    startBtn.addEventListener('click', () => {
+        if (!running) subscribeAll();
+    });
+
+    stopBtn.addEventListener('click', () => {
+        if (running) abort = true;
+    });
+})();
