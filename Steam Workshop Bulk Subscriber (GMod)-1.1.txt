@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Steam Workshop Bulk Subscriber (GMod)
+// @name         Steam Workshop Bulk Subscriber (GMod) – with failure log
 // @namespace    http://tampermonkey.net/
 // @version      1.1
-// @description  Subscribe to a list of workshop items from a text file
+// @description  Subscribe to a list of workshop items, logs failures
 // @author       You
 // @match        https://steamcommunity.com/*
 // @grant        none
@@ -12,7 +12,6 @@
 (function() {
     'use strict';
 
-    // Create a floating UI
     const ui = document.createElement('div');
     ui.style.cssText = `
         position: fixed; top: 10px; left: 10px; z-index: 9999;
@@ -26,6 +25,7 @@
         <button id="bulk-start" style="padding:5px 10px; margin-right:5px;">Start</button>
         <button id="bulk-stop" style="padding:5px 10px; margin-right:5px;">Stop</button>
         <span id="bulk-progress" style="margin-left:10px;"></span>
+        <div id="bulk-failures" style="margin-top:10px; font-size:12px; max-height:150px; overflow-y:auto; background:#0e141b; padding:5px;"></div>
     `;
     document.body.appendChild(ui);
 
@@ -33,11 +33,12 @@
     const startBtn = document.getElementById('bulk-start');
     const stopBtn = document.getElementById('bulk-stop');
     const progress = document.getElementById('bulk-progress');
+    const failuresDiv = document.getElementById('bulk-failures');
 
     let running = false;
     let abort = false;
+    const failedIds = [];
 
-    // Extract item IDs from URLs like: ...?id=123456
     function parseIds(raw) {
         const lines = raw.split(/[\r\n]+/);
         const ids = [];
@@ -45,7 +46,7 @@
             const match = line.match(/[?&]id=(\d+)/);
             if (match && match[1]) ids.push(match[1]);
         });
-        return [...new Set(ids)]; // unique
+        return [...new Set(ids)];
     }
 
     async function subscribeAll() {
@@ -65,8 +66,8 @@
         abort = false;
         startBtn.disabled = true;
         stopBtn.disabled = false;
+        failedIds.length = 0; // reset
 
-        // Get session ID (Steam sets this globally on community pages)
         const sessionId = (typeof g_sessionID !== 'undefined') ? g_sessionID : null;
         if (!sessionId) {
             alert('Could not find session ID. Make sure you are logged in and on a steamcommunity.com page.');
@@ -100,21 +101,41 @@
                     success++;
                 } else {
                     fail++;
+                    failedIds.push(id);
+                    console.warn(`Subscription failed for ID ${id}:`, json);
                 }
             } catch (err) {
                 fail++;
+                failedIds.push(id);
+                console.error(`Network error for ID ${id}`, err);
             }
 
             progress.textContent = `${i + 1}/${ids.length} – ${success} ok, ${fail} failed`;
 
-            // Delay 3 seconds between requests (adjust if needed)
+            // Show real-time failure list if any
+            if (failedIds.length > 0) {
+                failuresDiv.innerHTML = `<strong>Failed IDs (so far):</strong><br>${failedIds.join('<br>')}`;
+            }
+
             await new Promise(resolve => setTimeout(resolve, 3000));
         }
 
         running = false;
         startBtn.disabled = false;
         stopBtn.disabled = true;
-        if (!abort) progress.textContent += ' – Done!';
+
+        if (!abort) {
+            progress.textContent += ' – Done!';
+        }
+
+        if (failedIds.length > 0) {
+            failuresDiv.innerHTML = `<strong>Failed IDs (${failedIds.length}):</strong><br>${failedIds.join('<br>')}`;
+            // Also put them back in the textarea for easy copy/paste and retry
+            textarea.value = failedIds.map(id => `https://steamcommunity.com/sharedfiles/filedetails/?id=${id}`).join('\n');
+            console.log('Failed IDs:', failedIds);
+        } else {
+            failuresDiv.innerHTML = 'No failures!';
+        }
     }
 
     startBtn.addEventListener('click', () => {
